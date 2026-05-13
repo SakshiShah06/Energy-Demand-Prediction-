@@ -1,0 +1,439 @@
+# Load in necessary libraries
+
+```{r, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(caret)
+library(glue)
+library(arrow)
+library(stargazer)
+library(treemap)
+
+# set seed
+set.seed(218)
+```
+
+# Read in all data
+
+```{r}
+# house data
+static_house <- read_parquet("static_house_info.parquet")
+# get each unique building ID
+bldg_ids <- static_house %>% distinct(bldg_id) %>% .[[1]]
+# take a random sample of building IDs
+static_house %>% 
+  group_by(in.county) %>% 
+  sample_n(size = 5, replace = FALSE) %>% 
+  ungroup() %>% 
+  distinct(bldg_id) %>% 
+  .[[1]] -> bldg_ids_sample
+# get energy data for each house in the above sample
+all_house_energy <- map(
+  bldg_ids_sample, 
+  function(x) read_parquet(
+    glue(
+      "https://intro-datascience.s3.us-east-2.amazonaws.com/SC-data/2023-houseData/{x}.parquet"
+    )
+  ) %>% 
+    mutate(
+      bldg_id = x,
+      total_energy_consumption = rowSums(select(., ends_with("energy_consumption")))
+    ),
+  .progress = TRUE
+) %>% 
+  bind_rows()
+# merge energy usage and static house datasets
+all_house_energy %>% 
+  left_join(static_house, by = "bldg_id") -> energy_usage
+# get each unique county in house data
+counties <- static_house %>% distinct(in.county) %>% .[[1]]
+# get weather for each county
+all_weather <- map(
+  counties, 
+  function(x) read_csv(
+    glue(
+      "https://intro-datascience.s3.us-east-2.amazonaws.com/SC-data/weather/2023-weather-data/{x}.csv"
+    ),
+    show_col_types = FALSE
+  ) %>% 
+    mutate(in.county = x),
+  .progress = TRUE
+) %>% 
+  bind_rows()
+# merge weather data with energy/static house data
+energy_usage %>% 
+  left_join(all_weather, by = c("in.county", "time" = "date_time")) -> all_data
+# add month and time variables
+all_data %>%
+  rename("datetime" = "time") %>% 
+  mutate(
+    month = month(datetime, label = TRUE),
+    time = format(datetime, "%H:%M:%S")   
+  ) -> all_data
+```
+
+# Data visualizations
+
+```{r}
+# sqft
+energy_usage %>% 
+  group_by(bldg_id) %>% 
+  summarise(mean_energy_usage = mean(total_energy_consumption),
+            in.sqft = min(in.sqft)) %>% 
+  ggplot(aes(x = as.factor(in.sqft), y = mean_energy_usage)) +
+  geom_boxplot(color = "purple") +
+  labs(
+    title = "Square Feet vs. Total Energy Consumed",
+    x = "Square Feet",
+    y = "Total Energy Consumed (kWh)"
+  ) +
+  theme_minimal()
+
+# cooling setpoint
+energy_usage %>% 
+  group_by(bldg_id) %>% 
+  summarise(mean_energy_usage = mean(total_energy_consumption),
+            in.cooling_setpoint = min(in.cooling_setpoint)) %>% 
+  ggplot(aes(x = as.factor(in.cooling_setpoint), y = mean_energy_usage)) +
+  geom_boxplot(color = "purple") +
+  labs(
+    title = "Cooling Setpoint vs. Total Energy Consumed",
+    x = "Cooling Setpoint (F)",
+    y = "Total Energy Consumed (kWh)"
+  ) +
+  theme_minimal()
+
+# heating setpoint
+energy_usage %>% 
+  group_by(bldg_id) %>% 
+  summarise(mean_energy_usage = mean(total_energy_consumption),
+            in.heating_setpoint = min(in.heating_setpoint)) %>% 
+  ggplot(aes(x = as.factor(in.heating_setpoint), y = mean_energy_usage)) +
+  geom_boxplot(color = "purple") +
+  labs(
+    title = "Heating Setpoint vs. Total Energy Consumed",
+    x = "Heating Setpoint (F",
+    y = "Total Energy Consumed (kWh)"
+  ) +
+  theme_minimal()
+
+# num occupants
+energy_usage %>% 
+  group_by(bldg_id) %>% 
+  summarise(mean_energy_usage = mean(total_energy_consumption),
+            in.occupants = min(in.occupants)) %>% 
+  ggplot(aes(x = as.factor(in.occupants), y = mean_energy_usage)) +
+  geom_boxplot(color = "purple") +
+  labs(
+    title = "Number of Occupants vs. Total Energy Consumed",
+    x = "Number of Occupants",
+    y = "Total Energy Consumed (kWh)"
+  ) +
+  theme_minimal()
+
+# num bedrooms
+energy_usage %>% 
+  group_by(bldg_id) %>% 
+  summarise(mean_energy_usage = mean(total_energy_consumption),
+            in.bedrooms = min(in.bedrooms)) %>% 
+  ggplot(aes(x = as.factor(in.bedrooms), y = mean_energy_usage)) +
+  geom_boxplot(color = "purple") +
+  labs(
+    title = "Number of Bedrooms vs. Total Energy Consumed",
+    x = "Number of Bedrooms",
+    y = "Total Energy Consumed (kWh)"
+  ) +
+  theme_minimal()
+
+# temperature
+all_data %>% 
+  mutate(month_date = format(datetime, "%b %d")) %>% 
+  group_by(bldg_id, month_date) %>% 
+  summarise(mean_energy_usage = mean(total_energy_consumption),
+            temp = mean(`Dry Bulb Temperature [°C]`)) %>% 
+  ggplot(aes(x = temp, y = mean_energy_usage)) +
+  geom_point(color = "purple") +
+  labs(
+    title = "Temperature vs. Total Energy Consumed",
+    x = "Avg Daily Temperature (C)",
+    y = "Avg Daily Energy Consumed (kWh)"
+  ) +
+  theme_minimal()
+
+# humidity
+all_data %>% 
+  mutate(month_date = format(datetime, "%b %d")) %>% 
+  group_by(bldg_id, month_date) %>% 
+  summarise(mean_energy_usage = mean(total_energy_consumption),
+            hum = mean(`Relative Humidity [%]`)) %>% 
+  ggplot(aes(x = hum, y = mean_energy_usage)) +
+  geom_point(color = "purple") +
+  labs(
+    title = "Humidity vs. Total Energy Consumed",
+    x = "Avg Monthly Humidity (%)",
+    y = "Avg Monthly Energy Consumed (kWh)"
+  ) +
+  theme_minimal()
+# by county
+energy_usage %>% 
+  group_by(in.county) %>% 
+  summarise(tot_energy = sum(total_energy_consumption),
+            n_bldgs = n_distinct(bldg_id),
+            energy_per_bldg = tot_energy / n_bldgs) %>% 
+  # Create the treemap
+  treemap(., 
+          index = c("in.county"), # Group by county
+          vSize = "tot_energy",   # Size of the treemap sections
+          vColor = "tot_energy",  # Color by total energy consumption
+          draw = TRUE,            # Draw the treemap
+          palette = "Blues",      # Set color palette
+          title = "Total Energy Consumption by County")
+
+# table
+energy_usage %>% 
+  group_by(in.county) %>% 
+  summarise(tot_energy = sum(total_energy_consumption),
+            n_bldgs = n_distinct(bldg_id), # pointless on sample of 5 houses per county
+            energy_per_bldg = tot_energy / n_bldgs) %>% 
+  arrange(desc(energy_per_bldg))
+
+
+# by month
+energy_usage %>% 
+  mutate(month = month(time, label = TRUE)) %>% 
+  drop_na(month) %>% 
+  group_by(month) %>% 
+  summarise(tot_energy = sum(total_energy_consumption)) %>% 
+  # Create the treemap
+  treemap(., 
+          index = c("month"), # Group by county
+          vSize = "tot_energy",   # Size of the treemap sections
+          vColor = "tot_energy",  # Color by total energy consumption
+          draw = TRUE,            # Draw the treemap
+          palette = "Blues",      # Set color palette
+          title = "Total County Energy Consumption by Month")
+
+# table
+energy_usage %>% 
+  mutate(month = month(time, label = TRUE)) %>% 
+  drop_na(month) %>% 
+  group_by(month) %>% 
+  summarise(tot_energy = sum(total_energy_consumption)) %>% 
+  arrange(desc(tot_energy))
+
+# by time
+energy_usage %>% 
+  mutate(time = format(time, "%H:%M:%S")) %>% 
+  drop_na(time) %>% 
+  group_by(time) %>% 
+  summarise(tot_energy = sum(total_energy_consumption)) %>% 
+  # Create the treemap
+  treemap(., 
+          index = c("time"), # Group by county
+          vSize = "tot_energy",   # Size of the treemap sections
+          vColor = "tot_energy",  # Color by total energy consumption
+          draw = TRUE,            # Draw the treemap
+          palette = "Blues",      # Set color palette
+          title = "Total County Energy Consumption by Time")
+
+# table
+energy_usage %>% 
+  mutate(time = format(time, "%H:%M:%S")) %>% 
+  drop_na(time) %>% 
+  group_by(time) %>% 
+  summarise(tot_energy = sum(total_energy_consumption)) %>% 
+  arrange(desc(tot_energy))
+
+# visualize dependent variable distribution
+all_data %>% 
+  select(total_energy_consumption) %>% 
+  ggplot(aes(x = total_energy_consumption)) +
+  geom_density()
+```
+
+# Establish model predictors
+
+```{r}
+predictors <- c("month", "time", "in.sqft", "in.occupants", "in.bedrooms", 
+                "Dry Bulb Temperature [°C]", "Relative Humidity [%]",
+                "in.county", "in.cooling_setpoint", "in.heating_setpoint")
+```
+
+# Create model data
+
+```{r}
+all_data %>% 
+  select(all_of(predictors), total_energy_consumption) %>% 
+  mutate(in.occupants = as.numeric(gsub("[^0-9]", "", in.occupants)),
+         in.cooling_setpoint = as.numeric(gsub("[^0-9]", "", in.cooling_setpoint)),
+         in.heating_setpoint = as.numeric(gsub("[^0-9]", "", in.heating_setpoint))) %>% 
+  # remove missing observations
+  drop_na() -> model_data
+# split into train/test datasets
+train_ind <- createDataPartition(model_data$total_energy_consumption, p = 0.5) %>% .[[1]]
+train <- model_data[train_ind, ]
+test <- model_data[-train_ind, ]
+```
+
+# Run model
+
+```{r}
+# run models
+model <- lm(total_energy_consumption ~ ., data = train)
+model2 <- lm(log(total_energy_consumption) ~ ., data = train)
+model3 <- lm(log(total_energy_consumption) ~ ., data = train %>% select(-in.county))
+# observe model diagnostics
+stargazer(model, model2, model3, 
+          type = "html", 
+          title = "Energy Model Comparison",
+          style = "default",
+          out = "model_comparison.html")
+# plots
+# plot(model, which = 1) # residual plot
+# plot(model, which = 2) # normal q-q plot
+# plot(model, which = 3) # scale-location plot (check for homoscedasticity)
+# plot(model, which = 4) # Cook's distance plot (influence of each data point)
+```
+
+# Evaluate model on test data
+
+```{r}
+# establish true labels
+y_true <- test$total_energy_consumption
+# create predictions
+predictions <- predict(model, test) %>% unname() # remove indices
+predictions2 <- predict(model2, test) %>% unname() %>% exp() # remove indices
+predictions3 <- predict(model3, test) %>% unname() %>% exp() # remove indices
+# create validation df
+data.frame(
+  pred = predictions,
+  pred2 = predictions2,
+  pred3 = predictions3,
+  true = y_true
+) %>% 
+  rowwise() %>% 
+  mutate(
+    resid = true - pred, # residuals
+    resid2 = true - pred2, # residuals
+    resid3 = true - pred3 # residuals
+  ) -> val_df
+# full model evaluation
+data.table(
+  "Model 1" = c(MAE(predictions, y_true),
+                RMSE(predictions, y_true))
+)
+MAE(predictions, y_true) # MAE
+RMSE(predictions, y_true) # RMSE
+# residual plot on test set
+val_df %>% 
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point(color = "blue") +
+  geom_hline(yintercept = 0, color = "red", linewidth = 3) +
+  labs(
+    title = "Model 1 Test Residuals",
+    x = "Predicted Values",
+    y = "Residuals"
+  ) +
+  theme_minimal()
+```
+
+Notes:
+
+Running the linear model without log-transforming the dependent variable results in
+an inability to accurately predict outliers, as the energy consumption variable is
+highly right-skewed.
+
+Run a Bayesian regression and compare validation metrics to other linear models
+
+Ignore everything else below.
+
+# Bayesian Regression model
+
+```{r}
+# rename columns to create valid column names for stan code
+N <- nrow(train)
+train_list <- list(
+  N = N,
+  month = as.integer(train$month),
+  time = as.integer(as.factor(train$time)),
+  sqft = train$in.sqft,
+  occ = train$in.occupants,
+  bed = train$in.bedrooms,
+  temp = train$`Dry Bulb Temperature [°C]`,
+  hum = train$`Relative Humidity [%]`,
+  # county = as.integer(train$in.county), # remove county for the bayesian regression
+  cool = train$in.cooling_setpoint,
+  heat = train$in.heating_setpoint,
+  total_energy_consumption = train$total_energy_consumption
+)
+# Stan model code as a string
+stan_code <- "
+data {
+  int<lower=0> N;
+  int month[N];
+  int time[N];
+  vector[N] sqft;
+  vector[N] occ;
+  vector[N] bed;
+  vector[N] temp;
+  vector[N] hum;
+  vector[N] cool;
+  vector[N] heat;
+  vector[N] total_energy_consumption;
+}
+
+parameters {
+  real alpha;                       
+  real beta_month[12];                  
+  real beta_time[24];                   
+  real beta_sqft;                
+  real beta_occ;           
+  real beta_bed;            
+  real beta_temp;   
+  real beta_hum;      
+  real beta_cool;    
+  real beta_heat;    
+  real<lower=0> sigma;              
+}
+
+model {
+  vector[N] mu;
+
+  // Linear predictor (sum of coefficients times the respective variables)
+  for (n in 1:N) {
+    mu[n] = alpha + 
+            beta_month[month[n]] +      // Month-specific effect
+            beta_time[time[n]] +        // Time-specific effect
+            beta_sqft * sqft[n] +       // Square footage effect
+            beta_occ * occ[n] +         // Occupant effect
+            beta_bed * bed[n] +         // Bedroom effect
+            beta_temp * temp[n] +       // Temperature effect
+            beta_hum * hum[n] +         // Humidity effect
+            beta_cool * cool[n] +       // Cooling setpoint effect
+            beta_heat * heat[n];        // Heating setpoint effect
+  }
+
+  // Gamma likelihood for the total energy consumption
+  total_energy_consumption ~ gamma(alpha, sigma * exp(mu));
+}
+"
+# initialize values
+init_fun <- function() {
+  list(alpha = 1,   # Set alpha to a positive value
+       beta_month = rep(0, 12),  # Initial values for beta_month
+       beta_time = rep(0, 24),   # Initial values for beta_time
+       beta_sqft = 0,
+       beta_occ = 0,
+       beta_bed = 0,
+       beta_temp = 0,
+       beta_hum = 0,
+       beta_cool = 0,
+       beta_heat = 0,
+       sigma = 1)  # Set sigma to a positive value
+}
+# Fit the model
+fit <- stan(model_code = stan_code, data = train_list, init = init_fun)
+
+# Print the summary of the model fit
+print(fit)
+```
+
