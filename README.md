@@ -16,7 +16,7 @@ library in R.
 
 Exploratory analysis examined how energy usage varies by square footage, number 
 of bedrooms, number of occupants, heating and cooling setpoints, outdoor 
-temperature, humidity, time of day, and month of year visualized through 
+temperature, humidity, time of day, and month of year — visualized through 
 boxplots, treemaps, scatter plots, and distribution charts.
 
 ## Modeling
@@ -34,3 +34,10 @@ standard linear model due to the right-skewed distribution of energy consumption
 ## Shiny Dashboard
 An interactive Shiny app allows users to explore energy consumption trends across 
 different house types, counties, and weather conditions without writing any code.
+
+## Files
+- `energy_analysis.Rmd` — Full analysis: data wrangling, EDA, and regression models
+- `shiny_app.R` — Interactive Shiny dashboard
+
+## Tools & Languages
+R, tidyverse, caret, ggplot2, Shiny, Arrow, Stan
