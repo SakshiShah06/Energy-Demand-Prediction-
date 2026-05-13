@@ -1,4 +1,4 @@
-# Energy-Demand-Prediction-
+# Energy Demand Prediction
 Predicting residential energy demand from house characteristics and weather patterns using linear regression and Bayesian modeling
 ## Overview
 This project predicts hourly residential energy consumption across South Carolina 
